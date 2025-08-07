@@ -1,0 +1,8 @@
+fastapi[standard]
+numpy
+tensorflow-cpu
+pillow
+prometheus-fastapi-instrumentator
+mtcnn
+opencv-python
+uvicorn
