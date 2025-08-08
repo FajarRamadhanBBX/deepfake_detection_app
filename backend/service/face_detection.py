@@ -1,4 +1,8 @@
-def crop_face_square(detector, image_array): # <--- DIUBAH: Menerima array gambar, bukan path
+from mtcnn import MTCNN
+
+detector = MTCNN(device='CPU')
+
+def crop_face_square(image_array): # <--- DIUBAH: Menerima array gambar, bukan path
     """
     Mendeteksi wajah dari array gambar NumPy (format RGB) dan mengembalikannya
     sebagai potongan gambar persegi.
@@ -15,7 +19,7 @@ def crop_face_square(detector, image_array): # <--- DIUBAH: Menerima array gamba
         # Tentukan sisi terpanjang untuk membuat kotak persegi
         size = max(w, h)
         
-        # Center-align the square crop
+        # Center-align untuk crop foto
         center_x, center_y = x + w // 2, y + h // 2
         
         # Hitung koordinat baru untuk crop persegi

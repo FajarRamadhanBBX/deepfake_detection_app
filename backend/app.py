@@ -1,15 +1,15 @@
+import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import Response # <--- DIUBAH: Gunakan Response untuk gambar
-import numpy as np
-import io
-from PIL import Image
-import cv2
-from mtcnn import MTCNN
+from fastapi.responses import Response
+from face_detection import crop_face_square
+from image_processor import decode_image_from_bytes, convert_bgr_to_rgb, convert_rgb_to_bgr, encode_image_to_jpg
 
-# --- Inisialisasi Model di Awal ---
-# Model dimuat sekali saat aplikasi dimulai, bukan setiap ada request
-detector = MTCNN(device='CPU')
+# Safety Configuration
+MAX_FILE_SIZE_MB = 10
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+MAX_IMAGE_DIMENSION = 4096
 
+logging.basicConfig(level=logging.INFO)
 app = FastAPI()
 
 @app.get("/")
@@ -22,74 +22,52 @@ async def face_detection(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="File must be an image")
 
     try:
-        # 1. Baca file yang diupload sebagai bytes
         contents = await file.read()
+        if len(contents) > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File size exceeds the maximum limit of {MAX_FILE_SIZE_MB} MB."
+            )
         
-        # 2. Ubah bytes menjadi array NumPy yang bisa dibaca cv2
-        nparr = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        # Jika gambar tidak berhasil di-decode
-        if img is None:
-            raise HTTPException(status_code=400, detail="Could not decode image")
-            
-        # 3. Konversi warna dari BGR (OpenCV) ke RGB (MTCNN)
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        # 4. Deteksi dan potong wajah
-        cropped_face = crop_face_square(img_rgb) # <--- DIUBAH: Kirim array gambar, bukan path
+        image = decode_image_from_bytes(contents)
+        if image is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not decode image"
+            )
         
+        height, width, _ = image.shape
+        if height > MAX_IMAGE_DIMENSION or width > MAX_IMAGE_DIMENSION:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Image dimensions exceed the maximum limit of {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION} pixels."
+            )
+
+        image_rgb = convert_bgr_to_rgb(image)
+
+        cropped_face = crop_face_square(image_rgb)
         if cropped_face is None:
-            raise HTTPException(status_code=400, detail="No face detected in the image")
+            raise HTTPException(
+                status_code=400,
+                detail="No face detected in the image"
+            )
         
-        # 5. Konversi balik hasil potongan (RGB) ke BGR untuk encoding cv2
-        cropped_face_bgr = cv2.cvtColor(cropped_face, cv2.COLOR_RGB2BGR)
+        cropped_face_bgr = convert_rgb_to_bgr(cropped_face)
 
-        # 6. Encode gambar hasil potongan ke format JPEG di memori
-        is_success, buffer = cv2.imencode(".jpg", cropped_face_bgr)
-        if not is_success:
-            raise HTTPException(status_code=500, detail="Failed to encode cropped image")
+        cropped_face_result = encode_image_to_jpg(cropped_face_bgr)
+        if cropped_face_result is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not encode cropped face image"
+            )
 
-        # 7. Kembalikan gambar sebagai response dengan media type yang benar
-        return Response(content=buffer.tobytes(), media_type="image/jpeg")
+        return Response(content=cropped_face_result, media_type="image/jpeg")
 
     except HTTPException as e:
-        # Re-raise HTTPException agar FastAPI menanganinya
         raise e
     except Exception as e:
-        # Tangani error lainnya
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
-
-
-# --- Fungsi Helper yang Sudah Diperbaiki ---
-def crop_face_square(image_array): # <--- DIUBAH: Menerima array gambar, bukan path
-    """
-    Mendeteksi wajah dari array gambar NumPy (format RGB) dan mengembalikannya
-    sebagai potongan gambar persegi.
-    """
-    result = detector.detect_faces(image_array)
-    
-    if result:
-        # Ambil wajah pertama yang paling confidence
-        x, y, w, h = result[0]['box']
-        
-        # Pastikan koordinat tidak negatif
-        x, y = max(x, 0), max(y, 0)
-
-        # Tentukan sisi terpanjang untuk membuat kotak persegi
-        size = max(w, h)
-        
-        # Center-align the square crop
-        center_x, center_y = x + w // 2, y + h // 2
-        
-        # Hitung koordinat baru untuk crop persegi
-        x_new = max(center_x - size // 2, 0)
-        y_new = max(center_y - size // 2, 0)
-        
-        # Potong wajah dari gambar asli
-        # Pastikan area potongan tidak melebihi batas gambar
-        face_square = image_array[y_new:y_new+size, x_new:x_new+size]
-        
-        return face_square
-        
-    return None
+        logging.error(f"Unexpected error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected internal server error occurred."
+        )
