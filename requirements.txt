@@ -6,3 +6,4 @@ prometheus-fastapi-instrumentator
 mtcnn
 opencv-python
 uvicorn
+datasets
